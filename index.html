@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Morphing Shapes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *,
+    *::before,
+    *::after {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: "Inter", sans-serif;
+      overflow: hidden;
+      background: #040307;
+      background-image:
+        radial-gradient(ellipse 50% 80% at 20% 40%, rgba(100, 20, 20, 0.2) 0%, transparent 100%),
+        radial-gradient(ellipse 50% 80% at 80% 50%, rgba(20, 100, 100, 0.15) 0%, transparent 100%);
+      color: #fff;
+      display: flex;
+      height: 100vh;
+      justify-content: center;
+      align-items: center;
+    }
+
+    #canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: 1;
+    }
+
+    #btn-container {
+      position: relative;
+      z-index: 10;
+      align-self: flex-end;
+      margin-bottom: 40px;
+    }
+
+    button {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #fff;
+      padding: 12px 24px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-family: "Inter", sans-serif;
+      font-weight: 500;
+      font-size: 16px;
+      backdrop-filter: blur(10px);
+      transition: all 0.3s;
+    }
+
+    button:hover {
+      background: rgba(255, 255, 255, 0.25);
+      transform: translateY(-2px);
+    }
+  </style>
+</head>
+
+<body>
+  <canvas id="canvas"></canvas>
+  <div id="btn-container">
+    <button id="morph-btn">Morph Shape</button>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.147.0/build/three.module.js';
+    import { OrbitControls } from 'https://unpkg.com/three@0.147.0/examples/jsm/controls/OrbitControls.js';
+
+    // --- CONFIG ---
+    const CONF = {
+      color: 0xffffff,
+      particleCount: 15000,
+      particleSize: 0.15,
+      radius: 30, // Base radius for shapes
+    };
+
+    // --- SCENE SETUP ---
+    const canvas = document.getElementById('canvas');
+    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+
+    const scene = new THREE.Scene();
+
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 0, 80);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 0.5;
+
+    // --- GEOMETRY FUNCTIONS ---
+
+    function normalise(points, scale) {
+      if (points.length === 0) return [];
+      return points.map(p => p.multiplyScalar(scale));
+    }
+
+    // 1. Sphere
+    function getSpherePoints(count, radius) {
+      const points = [];
+      for (let i = 0; i < count; i++) {
+        const u = Math.random();
+        const v = Math.random();
+        const theta = 2 * Math.PI * u;
+        const phi = Math.acos(2 * v - 1);
+        const x = Math.sin(phi) * Math.cos(theta);
+        const y = Math.sin(phi) * Math.sin(theta);
+        const z = Math.cos(phi);
+        points.push(new THREE.Vector3(x, y, z));
+      }
+      return normalise(points, radius);
+    }
+
+    // 2. Torus Knot
+    function getTorusKnotPoints(count, radius) {
+      const geometry = new THREE.TorusKnotGeometry(10, 3, 200, 16, 2, 3);
+      const vertices = [];
+      const posAttribute = geometry.attributes.position;
+      for (let i = 0; i < posAttribute.count; i++) {
+        vertices.push(new THREE.Vector3().fromBufferAttribute(posAttribute, i));
+      }
+      // Resample/Repeat to match particle count
+      const points = [];
+      for (let i = 0; i < count; i++) {
+        points.push(vertices[i % vertices.length].clone());
+      }
+      return normalise(points, radius * 0.08); // Adjust scale
+    }
+
+    // 3. Dual Helix (DNA like)
+    function getHelixPoints(count, radius) {
+      const points = [];
+      const turns = 4;
+      const height = 60;
+      const r = radius * 0.6;
+
+      for (let i = 0; i < count; i++) {
+        const isSecond = i % 2 === 0;
+        const t = i / count; // 0 to 1
+        const angle = t * Math.PI * 2 * turns;
+        const h = (t - 0.5) * height; // Center vertically
+
+        const px = Math.cos(angle) * r;
+        const pz = Math.sin(angle) * r;
+        const py = h;
+
+        // Add some offset for second helix
+        const offset = isSecond ? Math.PI : 0;
+        if (isSecond) {
+          points.push(new THREE.Vector3(
+            Math.cos(angle + offset) * r,
+            py,
+            Math.sin(angle + offset) * r
+          ));
+        } else {
+          points.push(new THREE.Vector3(px, py, pz));
+        }
+      }
+      return points; // Already scaled roughly by manual calc
+    }
+
+    // 4. Cube (Random Volume)
+    function getCubePoints(count, radius) {
+      const points = [];
+      const size = radius * 1.5;
+      for (let i = 0; i < count; i++) {
+        const x = (Math.random() - 0.5) * size;
+        const y = (Math.random() - 0.5) * size;
+        const z = (Math.random() - 0.5) * size;
+        points.push(new THREE.Vector3(x, y, z));
+      }
+      return points;
+    }
+
+
+    const SHAPES = [
+      getSpherePoints(CONF.particleCount, CONF.radius),
+      getTorusKnotPoints(CONF.particleCount, CONF.radius),
+      getHelixPoints(CONF.particleCount, CONF.radius),
+      getCubePoints(CONF.particleCount, CONF.radius)
+    ];
+
+    let currentShapeIndex = 0;
+
+    // --- PARTICLE SYSTEM ---
+
+    const geometry = new THREE.BufferGeometry();
+    const positions = new Float32Array(CONF.particleCount * 3);
+    const colors = new Float32Array(CONF.particleCount * 3);
+    const sizes = new Float32Array(CONF.particleCount);
+    const randoms = new Float32Array(CONF.particleCount * 3);
+
+    const baseColor = new THREE.Color(CONF.color);
+    const palette = [0xff3c78, 0xff8c00, 0x00cfff, 0x9d00ff].map(c => new THREE.Color(c));
+
+    for (let i = 0; i < CONF.particleCount; i++) {
+      // Initial positions (Sphere)
+      const p = SHAPES[0][i];
+      positions[i * 3] = p.x;
+      positions[i * 3 + 1] = p.y;
+      positions[i * 3 + 2] = p.z;
+
+      // Color
+      const c = palette[Math.floor(Math.random() * palette.length)];
+      colors[i * 3] = c.r;
+      colors[i * 3 + 1] = c.g;
+      colors[i * 3 + 2] = c.b;
+
+      sizes[i] = Math.random();
+
+      randoms[i * 3] = Math.random();
+      randoms[i * 3 + 1] = Math.random();
+      randoms[i * 3 + 2] = Math.random();
+    }
+
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+    geometry.setAttribute('random', new THREE.BufferAttribute(randoms, 3));
+
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+        uScale: { value: 1.0 }
+      },
+      vertexShader: `
+            uniform float uTime;
+            uniform float uScale;
+            attribute float size;
+            attribute vec3 random;
+            varying vec3 vColor;
+            
+            void main() {
+                vColor = color;
+                vec3 p = position;
+                
+                // Subtle noise movement
+                float t = uTime * 0.5;
+                p.x += sin(t * random.x + p.y * 0.1) * 0.5;
+                p.y += cos(t * random.y + p.z * 0.1) * 0.5;
+                p.z += sin(t * random.z + p.x * 0.1) * 0.5;
+                
+                vec4 mvPosition = modelViewMatrix * vec4(p, 1.0);
+                gl_Position = projectionMatrix * mvPosition;
+                
+                // Size attenuation
+                gl_PointSize = (300.0 * size * uScale) / -mvPosition.z;
+            }
+        `,
+      fragmentShader: `
+            varying vec3 vColor;
+            
+            void main() {
+                // Circle shape
+                float d = length(gl_PointCoord - 0.5);
+                if (d > 0.5) discard;
+                
+                // Soft edge
+                float alpha = 1.0 - smoothstep(0.3, 0.5, d);
+                
+                gl_FragColor = vec4(vColor, alpha);
+            }
+        `,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending
+    });
+
+    const particles = new THREE.Points(geometry, material);
+    scene.add(particles);
+
+    // --- MORPHING LOGIC ---
+    let isMorphing = false;
+    let morphProgress = 0;
+    let sourcePositions = [];
+    let targetPositions = [];
+
+    function startMorph() {
+      if (isMorphing) return;
+
+      isMorphing = true;
+      morphProgress = 0;
+
+      const nextIndex = (currentShapeIndex + 1) % SHAPES.length;
+
+      sourcePositions = new Float32Array(geometry.attributes.position.array);
+
+      // Target positions need to be packed into array
+      const shapeVecs = SHAPES[nextIndex];
+      targetPositions = new Float32Array(CONF.particleCount * 3);
+      for (let i = 0; i < CONF.particleCount; i++) {
+        const v = shapeVecs[i] || new THREE.Vector3();
+        targetPositions[i * 3] = v.x;
+        targetPositions[i * 3 + 1] = v.y;
+        targetPositions[i * 3 + 2] = v.z;
+      }
+
+      currentShapeIndex = nextIndex;
+    }
+
+    // Easing function (Cubic Out)
+    function easeOutCubic(x) {
+      return 1 - Math.pow(1 - x, 3);
+    }
+
+    // --- EVENTS ---
+    document.getElementById('morph-btn').addEventListener('click', startMorph);
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // --- LOOP ---
+    const clock = new THREE.Clock();
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const time = clock.getElapsedTime();
+      material.uniforms.uTime.value = time;
+      controls.update();
+
+      if (isMorphing) {
+        morphProgress += 0.015; // Speed
+        if (morphProgress > 1) {
+          morphProgress = 1;
+          isMorphing = false;
+        }
+
+        const t = easeOutCubic(morphProgress);
+        const posAttr = geometry.attributes.position;
+
+        for (let i = 0; i < CONF.particleCount * 3; i++) {
+          posAttr.array[i] = sourcePositions[i] + (targetPositions[i] - sourcePositions[i]) * t;
+        }
+        posAttr.needsUpdate = true;
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    animate();
+
+  </script>
+</body>
+
+</html>
