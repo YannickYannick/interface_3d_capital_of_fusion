@@ -1,0 +1,643 @@
+import { useRef, useMemo, useEffect, useCallback } from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { Float, MeshDistortMaterial, OrbitControls } from '@react-three/drei';
+import * as THREE from 'three';
+import gsap from 'gsap';
+
+// Physics configuration
+const MOUSE_FORCE = 2.5;
+const MOUSE_RADIUS = 2.5;
+const COLLISION_FORCE = 0.8;
+const DAMPING = 0.92;
+const RETURN_FORCE = 0.015;
+
+// Camera animation config
+const CAMERA_OFFSET = 3; // Distance from the sphere when zoomed
+const CAMERA_ANIMATION_DURATION = 1.2;
+
+// Shared state for physics
+interface PhysicsState {
+  velocity: THREE.Vector3;
+  basePosition: THREE.Vector3;
+  currentPosition: THREE.Vector3;
+  radius: number;
+}
+
+// Global registry for collision detection and raycasting
+const sphereRegistry: Map<string, PhysicsState> = new Map();
+const meshRegistry: Map<string, THREE.Object3D> = new Map();
+let mousePosition3D = new THREE.Vector3(0, 0, 0);
+
+// Configuration for elliptical orbit
+interface OrbitConfig {
+  radiusX: number;
+  radiusY: number;
+  speed: number;
+  phase: number;
+  centerX: number;
+  centerY: number;
+  centerZ: number;
+}
+
+// Custom hook for physics behavior
+function usePhysics(
+  id: string,
+  orbit: OrbitConfig,
+  scale: number,
+  meshRef: React.RefObject<THREE.Mesh | THREE.Points | THREE.LineSegments | THREE.Group>
+) {
+  const physicsState = useRef<PhysicsState>({
+    velocity: new THREE.Vector3(0, 0, 0),
+    basePosition: new THREE.Vector3(orbit.centerX, orbit.centerY, orbit.centerZ),
+    currentPosition: new THREE.Vector3(orbit.centerX, orbit.centerY, orbit.centerZ),
+    radius: scale * 1.2,
+  });
+
+  useEffect(() => {
+    sphereRegistry.set(id, physicsState.current);
+    if (meshRef.current) {
+      meshRegistry.set(id, meshRef.current);
+    }
+    return () => {
+      sphereRegistry.delete(id);
+      meshRegistry.delete(id);
+    };
+  }, [id, meshRef.current]);
+
+  useFrame((state) => {
+    if (!meshRef.current) return;
+
+    const physics = physicsState.current;
+    const t = state.clock.elapsedTime * orbit.speed + orbit.phase;
+
+    // Calculate base elliptical position
+    const baseX = orbit.centerX + Math.cos(t) * orbit.radiusX;
+    const baseY = orbit.centerY + Math.sin(t) * orbit.radiusY;
+    const baseZ = orbit.centerZ + Math.sin(t * 0.5) * 0.5;
+    physics.basePosition.set(baseX, baseY, baseZ);
+
+    // Mouse repulsion force
+    const distToMouse = physics.currentPosition.distanceTo(mousePosition3D);
+    if (distToMouse < MOUSE_RADIUS && distToMouse > 0.01) {
+      const force = (1 - distToMouse / MOUSE_RADIUS) * MOUSE_FORCE;
+      const direction = new THREE.Vector3()
+        .subVectors(physics.currentPosition, mousePosition3D)
+        .normalize();
+      physics.velocity.add(direction.multiplyScalar(force * 0.1));
+    }
+
+    // Collision detection with other spheres
+    sphereRegistry.forEach((other, otherId) => {
+      if (otherId === id) return;
+      
+      const dist = physics.currentPosition.distanceTo(other.currentPosition);
+      const minDist = physics.radius + other.radius;
+      
+      if (dist < minDist && dist > 0.01) {
+        const overlap = minDist - dist;
+        const direction = new THREE.Vector3()
+          .subVectors(physics.currentPosition, other.currentPosition)
+          .normalize();
+        physics.velocity.add(direction.multiplyScalar(overlap * COLLISION_FORCE * 0.1));
+      }
+    });
+
+    // Return to base position (spring force)
+    const returnDir = new THREE.Vector3()
+      .subVectors(physics.basePosition, physics.currentPosition);
+    physics.velocity.add(returnDir.multiplyScalar(RETURN_FORCE));
+
+    // Apply velocity with damping
+    physics.velocity.multiplyScalar(DAMPING);
+    physics.currentPosition.add(physics.velocity);
+
+    // Update mesh position
+    meshRef.current.position.copy(physics.currentPosition);
+  });
+
+  return physicsState;
+}
+
+// Mouse tracker that updates 3D position
+function MousePositionTracker() {
+  const { viewport } = useThree();
+  
+  useFrame((state) => {
+    const x = (state.pointer.x * viewport.width) / 2;
+    const y = (state.pointer.y * viewport.height) / 2;
+    mousePosition3D.set(x, y, 0);
+  });
+
+  return null;
+}
+
+// Raycaster click handler for camera animation
+function CameraController() {
+  const { camera, gl } = useThree();
+  const controlsRef = useRef<any>(null);
+  const raycaster = useRef(new THREE.Raycaster());
+  const mouse = useRef(new THREE.Vector2());
+  const isAnimating = useRef(false);
+
+  const handleClick = useCallback((event: MouseEvent) => {
+    if (isAnimating.current) return;
+
+    // Calculate normalized mouse coordinates (-1 to +1)
+    const rect = gl.domElement.getBoundingClientRect();
+    mouse.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+    // Update raycaster with camera and mouse position
+    raycaster.current.setFromCamera(mouse.current, camera);
+
+    // Get all meshes from registry
+    const meshes = Array.from(meshRegistry.values());
+    
+    // Check for intersections
+    const intersects = raycaster.current.intersectObjects(meshes, true);
+
+    if (intersects.length > 0) {
+      const hitObject = intersects[0].object;
+      const hitPoint = intersects[0].point;
+
+      // Find the root parent (the actual sphere group)
+      let targetObject: THREE.Object3D = hitObject;
+      while (targetObject.parent && !meshRegistry.has(getIdFromObject(targetObject))) {
+        targetObject = targetObject.parent;
+      }
+
+      // Get the world position of the hit object
+      const targetPosition = new THREE.Vector3();
+      targetObject.getWorldPosition(targetPosition);
+
+      // Calculate camera target position (offset from the sphere)
+      const directionToCamera = new THREE.Vector3()
+        .subVectors(camera.position, targetPosition)
+        .normalize();
+      
+      const cameraTargetPosition = new THREE.Vector3()
+        .copy(targetPosition)
+        .add(directionToCamera.multiplyScalar(CAMERA_OFFSET));
+
+      // Animate camera with GSAP
+      isAnimating.current = true;
+
+      // Animate camera position
+      gsap.to(camera.position, {
+        x: cameraTargetPosition.x,
+        y: cameraTargetPosition.y,
+        z: cameraTargetPosition.z,
+        duration: CAMERA_ANIMATION_DURATION,
+        ease: 'power2.inOut',
+        onUpdate: () => {
+          camera.updateProjectionMatrix();
+        },
+        onComplete: () => {
+          isAnimating.current = false;
+        }
+      });
+
+      // Animate controls target (look-at point)
+      if (controlsRef.current) {
+        gsap.to(controlsRef.current.target, {
+          x: targetPosition.x,
+          y: targetPosition.y,
+          z: targetPosition.z,
+          duration: CAMERA_ANIMATION_DURATION,
+          ease: 'power2.inOut',
+          onUpdate: () => {
+            controlsRef.current.update();
+          }
+        });
+      }
+    }
+  }, [camera, gl]);
+
+  // Double-click to reset camera
+  const handleDoubleClick = useCallback(() => {
+    if (isAnimating.current) return;
+    
+    isAnimating.current = true;
+
+    gsap.to(camera.position, {
+      x: 0,
+      y: 0,
+      z: 10,
+      duration: CAMERA_ANIMATION_DURATION,
+      ease: 'power2.inOut',
+      onComplete: () => {
+        isAnimating.current = false;
+      }
+    });
+
+    if (controlsRef.current) {
+      gsap.to(controlsRef.current.target, {
+        x: 0,
+        y: 0,
+        z: 0,
+        duration: CAMERA_ANIMATION_DURATION,
+        ease: 'power2.inOut',
+        onUpdate: () => {
+          controlsRef.current.update();
+        }
+      });
+    }
+  }, [camera]);
+
+  useEffect(() => {
+    gl.domElement.addEventListener('click', handleClick);
+    gl.domElement.addEventListener('dblclick', handleDoubleClick);
+    
+    return () => {
+      gl.domElement.removeEventListener('click', handleClick);
+      gl.domElement.removeEventListener('dblclick', handleDoubleClick);
+    };
+  }, [gl, handleClick, handleDoubleClick]);
+
+  return (
+    <OrbitControls
+      ref={controlsRef}
+      enablePan={false}
+      enableZoom={true}
+      minDistance={3}
+      maxDistance={20}
+      enableDamping
+      dampingFactor={0.05}
+    />
+  );
+}
+
+// Helper to find ID from object (simplified)
+function getIdFromObject(obj: THREE.Object3D): string {
+  for (const [id, mesh] of meshRegistry.entries()) {
+    if (mesh === obj || mesh.children.includes(obj)) {
+      return id;
+    }
+  }
+  return '';
+}
+
+// Wireframe sphere component with physics
+function WireframeSphere({ id, orbit, scale, rotationSpeed }: { id: string; orbit: OrbitConfig; scale: number; rotationSpeed: number }) {
+  const meshRef = useRef<THREE.Mesh>(null);
+  usePhysics(id, orbit, scale, meshRef);
+  
+  useEffect(() => {
+    if (meshRef.current) {
+      meshRegistry.set(id, meshRef.current);
+    }
+    return () => { meshRegistry.delete(id); };
+  }, [id]);
+
+  useFrame(() => {
+    if (meshRef.current) {
+      meshRef.current.rotation.x += rotationSpeed * 0.003;
+      meshRef.current.rotation.y += rotationSpeed * 0.005;
+    }
+  });
+
+  return (
+    <Float speed={0.3} rotationIntensity={0.1} floatIntensity={0.15}>
+      <mesh ref={meshRef} scale={scale} name={id}>
+        <icosahedronGeometry args={[1, 2]} />
+        <meshBasicMaterial color="#ffffff" wireframe transparent opacity={0.6} />
+      </mesh>
+    </Float>
+  );
+}
+
+// Dotted sphere component with physics
+function DottedSphere({ id, orbit, scale, rotationSpeed }: { id: string; orbit: OrbitConfig; scale: number; rotationSpeed: number }) {
+  const groupRef = useRef<THREE.Group>(null);
+  const pointsRef = useRef<THREE.Points>(null);
+  usePhysics(id, orbit, scale, groupRef);
+
+  useEffect(() => {
+    if (groupRef.current) {
+      meshRegistry.set(id, groupRef.current);
+    }
+    return () => { meshRegistry.delete(id); };
+  }, [id]);
+  
+  const particlesPosition = useMemo(() => {
+    const positions = new Float32Array(1500 * 3);
+    const radius = 1;
+    
+    for (let i = 0; i < 1500; i++) {
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      
+      positions[i * 3] = radius * Math.sin(phi) * Math.cos(theta);
+      positions[i * 3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
+      positions[i * 3 + 2] = radius * Math.cos(phi);
+    }
+    
+    return positions;
+  }, []);
+
+  useFrame(() => {
+    if (pointsRef.current) {
+      pointsRef.current.rotation.x += rotationSpeed * 0.002;
+      pointsRef.current.rotation.y += rotationSpeed * 0.003;
+    }
+  });
+
+  return (
+    <Float speed={0.2} rotationIntensity={0.08} floatIntensity={0.1}>
+      <group ref={groupRef} name={id}>
+        {/* Invisible sphere for raycasting */}
+        <mesh visible={false}>
+          <sphereGeometry args={[scale, 16, 16]} />
+          <meshBasicMaterial transparent opacity={0} />
+        </mesh>
+        <points ref={pointsRef} scale={scale}>
+          <bufferGeometry>
+            <bufferAttribute
+              attach="attributes-position"
+              count={1500}
+              array={particlesPosition}
+              itemSize={3}
+            />
+          </bufferGeometry>
+          <pointsMaterial size={0.015} color="#ffffff" transparent opacity={0.8} sizeAttenuation />
+        </points>
+      </group>
+    </Float>
+  );
+}
+
+// Glass sphere component with physics
+function GlassSphere({ id, orbit, scale, color }: { id: string; orbit: OrbitConfig; scale: number; color: string }) {
+  const meshRef = useRef<THREE.Mesh>(null);
+  usePhysics(id, orbit, scale, meshRef);
+
+  useEffect(() => {
+    if (meshRef.current) {
+      meshRegistry.set(id, meshRef.current);
+    }
+    return () => { meshRegistry.delete(id); };
+  }, [id]);
+
+  useFrame(() => {
+    if (meshRef.current) {
+      meshRef.current.rotation.z += 0.002;
+    }
+  });
+
+  return (
+    <Float speed={0.25} rotationIntensity={0.1} floatIntensity={0.12}>
+      <mesh ref={meshRef} scale={scale} name={id}>
+        <sphereGeometry args={[1, 64, 64]} />
+        <MeshDistortMaterial
+          color={color}
+          transparent
+          opacity={0.85}
+          roughness={0.1}
+          metalness={0.9}
+          distort={0.15}
+          speed={1.5}
+        />
+      </mesh>
+    </Float>
+  );
+}
+
+// Chrome sphere component with physics
+function ChromeSphere({ id, orbit, scale }: { id: string; orbit: OrbitConfig; scale: number }) {
+  const meshRef = useRef<THREE.Mesh>(null);
+  usePhysics(id, orbit, scale, meshRef);
+
+  useEffect(() => {
+    if (meshRef.current) {
+      meshRegistry.set(id, meshRef.current);
+    }
+    return () => { meshRegistry.delete(id); };
+  }, [id]);
+
+  useFrame(() => {
+    if (meshRef.current) {
+      meshRef.current.rotation.y += 0.002;
+    }
+  });
+
+  return (
+    <Float speed={0.3} rotationIntensity={0.08} floatIntensity={0.15}>
+      <mesh ref={meshRef} scale={scale} name={id}>
+        <sphereGeometry args={[1, 64, 64]} />
+        <meshStandardMaterial
+          color="#e8e8e8"
+          roughness={0.05}
+          metalness={1}
+          envMapIntensity={1.2}
+        />
+      </mesh>
+    </Float>
+  );
+}
+
+// Network sphere component with physics
+function NetworkSphere({ id, orbit, scale, rotationSpeed }: { id: string; orbit: OrbitConfig; scale: number; rotationSpeed: number }) {
+  const groupRef = useRef<THREE.Group>(null);
+  usePhysics(id, orbit, scale, groupRef);
+
+  useEffect(() => {
+    if (groupRef.current) {
+      meshRegistry.set(id, groupRef.current);
+    }
+    return () => { meshRegistry.delete(id); };
+  }, [id]);
+
+  const lineGeometry = useMemo(() => {
+    const geometry = new THREE.BufferGeometry();
+    const positions: number[] = [];
+    const radius = 1;
+    const points: THREE.Vector3[] = [];
+    
+    for (let i = 0; i < 60; i++) {
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      points.push(new THREE.Vector3(
+        radius * Math.sin(phi) * Math.cos(theta),
+        radius * Math.sin(phi) * Math.sin(theta),
+        radius * Math.cos(phi)
+      ));
+    }
+    
+    for (let i = 0; i < points.length; i++) {
+      for (let j = i + 1; j < points.length; j++) {
+        if (points[i].distanceTo(points[j]) < 0.5) {
+          positions.push(points[i].x, points[i].y, points[i].z);
+          positions.push(points[j].x, points[j].y, points[j].z);
+        }
+      }
+    }
+    
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    return geometry;
+  }, []);
+
+  useFrame(() => {
+    if (groupRef.current) {
+      groupRef.current.rotation.x += rotationSpeed * 0.002;
+      groupRef.current.rotation.y += rotationSpeed * 0.0025;
+    }
+  });
+
+  return (
+    <Float speed={0.2} rotationIntensity={0.05} floatIntensity={0.1}>
+      <group ref={groupRef} name={id}>
+        {/* Invisible sphere for raycasting */}
+        <mesh visible={false}>
+          <sphereGeometry args={[scale, 16, 16]} />
+          <meshBasicMaterial transparent opacity={0} />
+        </mesh>
+        <lineSegments scale={scale} geometry={lineGeometry}>
+          <lineBasicMaterial color="#ffffff" transparent opacity={0.4} />
+        </lineSegments>
+      </group>
+    </Float>
+  );
+}
+
+// Starburst component with physics
+function Starburst({ id, orbit, scale }: { id: string; orbit: OrbitConfig; scale: number }) {
+  const groupRef = useRef<THREE.Group>(null);
+  usePhysics(id, orbit, scale, groupRef);
+
+  useEffect(() => {
+    if (groupRef.current) {
+      meshRegistry.set(id, groupRef.current);
+    }
+    return () => { meshRegistry.delete(id); };
+  }, [id]);
+
+  const geometry = useMemo(() => {
+    const geo = new THREE.BufferGeometry();
+    const positions: number[] = [];
+    const rayCount = 80;
+    
+    for (let i = 0; i < rayCount; i++) {
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      const length = 0.4 + Math.random() * 0.6;
+      
+      positions.push(0, 0, 0);
+      positions.push(
+        length * Math.sin(phi) * Math.cos(theta),
+        length * Math.sin(phi) * Math.sin(theta),
+        length * Math.cos(phi)
+      );
+    }
+    
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    return geo;
+  }, []);
+
+  useFrame(() => {
+    if (groupRef.current) {
+      groupRef.current.rotation.x += 0.001;
+      groupRef.current.rotation.y += 0.0015;
+    }
+  });
+
+  return (
+    <Float speed={0.25} rotationIntensity={0.05} floatIntensity={0.08}>
+      <group ref={groupRef} name={id}>
+        {/* Invisible sphere for raycasting */}
+        <mesh visible={false}>
+          <sphereGeometry args={[scale, 16, 16]} />
+          <meshBasicMaterial transparent opacity={0} />
+        </mesh>
+        <lineSegments scale={scale} geometry={geometry}>
+          <lineBasicMaterial color="#ffffff" transparent opacity={0.6} />
+        </lineSegments>
+      </group>
+    </Float>
+  );
+}
+
+// Camera rotation based on mouse (subtle)
+function CameraRotation({ children }: { children: React.ReactNode }) {
+  const groupRef = useRef<THREE.Group>(null);
+  const { viewport } = useThree();
+
+  useFrame((state) => {
+    if (groupRef.current) {
+      const x = (state.pointer.x * viewport.width) / 30;
+      const y = (state.pointer.y * viewport.height) / 30;
+      
+      groupRef.current.rotation.y = THREE.MathUtils.lerp(groupRef.current.rotation.y, x * 0.04, 0.015);
+      groupRef.current.rotation.x = THREE.MathUtils.lerp(groupRef.current.rotation.x, -y * 0.03, 0.015);
+    }
+  });
+
+  return <group ref={groupRef}>{children}</group>;
+}
+
+// Main scene with physics
+function Scene() {
+  const orbits: { id: string; type: string; orbit: OrbitConfig; scale: number; rotationSpeed?: number; color?: string }[] = [
+    // Upper arc
+    { id: 'wire1', type: 'wireframe', orbit: { radiusX: 0.4, radiusY: 0.3, speed: 0.08, phase: 0, centerX: -4.5, centerY: 1.5, centerZ: -1 }, scale: 1.2, rotationSpeed: 0.6 },
+    { id: 'dot1', type: 'dotted', orbit: { radiusX: 0.35, radiusY: 0.25, speed: 0.06, phase: 1, centerX: -2.5, centerY: 2.8, centerZ: 0 }, scale: 1.5, rotationSpeed: 0.4 },
+    { id: 'glass1', type: 'glass', orbit: { radiusX: 0.3, radiusY: 0.2, speed: 0.07, phase: 2, centerX: -0.5, centerY: 2.2, centerZ: 0.5 }, scale: 0.9, color: '#1a1a2e' },
+    { id: 'net1', type: 'network', orbit: { radiusX: 0.45, radiusY: 0.3, speed: 0.05, phase: 3, centerX: 2, centerY: 2.5, centerZ: -0.5 }, scale: 1.4, rotationSpeed: 0.5 },
+    { id: 'chrome1', type: 'chrome', orbit: { radiusX: 0.25, radiusY: 0.2, speed: 0.09, phase: 4, centerX: 4, centerY: 1.2, centerZ: 0 }, scale: 0.7 },
+    
+    // Lower arc
+    { id: 'wire2', type: 'wireframe', orbit: { radiusX: 0.35, radiusY: 0.25, speed: 0.07, phase: 5, centerX: -4, centerY: -0.8, centerZ: 0 }, scale: 0.9, rotationSpeed: 0.7 },
+    { id: 'star1', type: 'starburst', orbit: { radiusX: 0.4, radiusY: 0.3, speed: 0.06, phase: 6, centerX: -2, centerY: -1.8, centerZ: 0.3 }, scale: 1.2 },
+    { id: 'glass2', type: 'glass', orbit: { radiusX: 0.35, radiusY: 0.25, speed: 0.08, phase: 7, centerX: 0.5, centerY: -2.2, centerZ: 0 }, scale: 1.3, color: '#8b5cf6' },
+    { id: 'net2', type: 'network', orbit: { radiusX: 0.4, radiusY: 0.25, speed: 0.06, phase: 8, centerX: 3, centerY: -1.5, centerZ: 0.2 }, scale: 1.1, rotationSpeed: 0.4 },
+    { id: 'dot2', type: 'dotted', orbit: { radiusX: 0.3, radiusY: 0.2, speed: 0.07, phase: 9, centerX: 4.5, centerY: -0.3, centerZ: -0.3 }, scale: 1, rotationSpeed: 0.5 },
+    
+    // Accent
+    { id: 'glass3', type: 'glass', orbit: { radiusX: 0.2, radiusY: 0.15, speed: 0.1, phase: 10, centerX: 3.5, centerY: 0.5, centerZ: 0.5 }, scale: 0.5, color: '#06b6d4' },
+  ];
+
+  return (
+    <>
+      <MousePositionTracker />
+      <CameraController />
+      <CameraRotation>
+        {orbits.map((item) => {
+          switch (item.type) {
+            case 'wireframe':
+              return <WireframeSphere key={item.id} id={item.id} orbit={item.orbit} scale={item.scale} rotationSpeed={item.rotationSpeed || 1} />;
+            case 'dotted':
+              return <DottedSphere key={item.id} id={item.id} orbit={item.orbit} scale={item.scale} rotationSpeed={item.rotationSpeed || 1} />;
+            case 'glass':
+              return <GlassSphere key={item.id} id={item.id} orbit={item.orbit} scale={item.scale} color={item.color || '#7c3aed'} />;
+            case 'chrome':
+              return <ChromeSphere key={item.id} id={item.id} orbit={item.orbit} scale={item.scale} />;
+            case 'network':
+              return <NetworkSphere key={item.id} id={item.id} orbit={item.orbit} scale={item.scale} rotationSpeed={item.rotationSpeed || 1} />;
+            case 'starburst':
+              return <Starburst key={item.id} id={item.id} orbit={item.orbit} scale={item.scale} />;
+            default:
+              return null;
+          }
+        })}
+        
+        <ambientLight intensity={0.35} />
+        <pointLight position={[10, 10, 10]} intensity={1} color="#ffffff" />
+        <pointLight position={[-10, -10, -10]} intensity={0.4} color="#7c3aed" />
+        <pointLight position={[0, 5, 5]} intensity={0.4} color="#06b6d4" />
+      </CameraRotation>
+    </>
+  );
+}
+
+export default function FloatingSpheres() {
+  return (
+    <div className="absolute inset-0 z-0">
+      <Canvas
+        camera={{ position: [0, 0, 10], fov: 50 }}
+        dpr={[1, 2]}
+        gl={{ antialias: true, alpha: true }}
+      >
+        <Scene />
+      </Canvas>
+    </div>
+  );
+}
