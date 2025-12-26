@@ -30,7 +30,6 @@ canvas {
   height: 100%;
   background: transparent !important;
   pointer-events: auto;
-  isolation: isolate;
 }
 
 .text-shadow-lg {

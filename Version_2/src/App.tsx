@@ -7,6 +7,7 @@ import Projects from './pages/Projects';
 import Section from './pages/Section';
 import PageTransition from './components/PageTransition';
 import YouTubeBackground from './components/YouTubeBackground';
+import { YouTubeVisibilityProvider } from './contexts/YouTubeVisibilityContext';
 
 function AppRoutes() {
   const location = useLocation();
@@ -138,10 +139,12 @@ function Nav() {
 export default function App() {
   return (
     <BrowserRouter>
-      {/* Vidéo YouTube en arrière-plan - persiste sur toutes les pages */}
-      <YouTubeBackground videoId="Dqg0oKlXpTE" />
-      <Nav />
-      <AppRoutes />
+      <YouTubeVisibilityProvider>
+        {/* Vidéo YouTube en arrière-plan - persiste sur toutes les pages */}
+        <YouTubeBackground videoId="Dqg0oKlXpTE" />
+        <Nav />
+        <AppRoutes />
+      </YouTubeVisibilityProvider>
     </BrowserRouter>
   );
 }

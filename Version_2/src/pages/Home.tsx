@@ -1,25 +1,31 @@
 import Scene3D from '../components/Scene3D';
 import VideoBackground from '../components/VideoBackground';
 import Logo from '../components/Logo';
+import { useYouTubeVisibility } from '../contexts/YouTubeVisibilityContext';
 
 export default function Home() {
+  const { isYouTubeVisible } = useYouTubeVisibility();
+
   return (
     <div style={{ position: 'relative', width: '100%', height: '100vh' }}>
-      {/* Background video sur la moitié droite de l'écran */}
+      {/* Background video en plein écran - caché quand YouTube est visible */}
       <div style={{ 
         position: 'fixed', 
         top: 0, 
-        right: 0, 
-        width: '50%', 
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: '100%', 
         height: '100vh', 
         overflow: 'hidden',
-        zIndex: -2
+        zIndex: -2,
+        visibility: isYouTubeVisible ? 'hidden' : 'visible'
       }}>
         <VideoBackground src="/background-video.mp4" />
       </div>
       
-      {/* Planètes - toujours au-dessus */}
-      <div style={{ position: 'relative', zIndex: 100, isolation: 'isolate' }}>
+      {/* Planètes - toujours au-dessus dans un contexte séparé */}
+      <div style={{ position: 'fixed', inset: 0, zIndex: 9999, pointerEvents: 'auto' }}>
         <Scene3D />
       </div>
       <Logo />

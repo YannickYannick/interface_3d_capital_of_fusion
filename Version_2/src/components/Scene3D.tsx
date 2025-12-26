@@ -706,5 +706,5 @@ export default function Scene3D() {
     };
   }, []);
 
-  return <div ref={containerRef} className="fixed inset-0 w-full h-full" style={{ zIndex: 1, isolation: 'isolate' }} />;
+  return <div ref={containerRef} className="fixed inset-0 w-full h-full" style={{ zIndex: 9999, pointerEvents: 'auto' }} />;
 }

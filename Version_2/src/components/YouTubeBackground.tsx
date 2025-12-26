@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
+import { useYouTubeVisibility } from '../contexts/YouTubeVisibilityContext';
 
 interface YouTubeBackgroundProps {
   videoId: string;
@@ -8,18 +9,18 @@ interface YouTubeBackgroundProps {
 
 export default function YouTubeBackground({ videoId, className = '' }: YouTubeBackgroundProps) {
   const [isMuted, setIsMuted] = useState(true);
-  const [videoOpacity, setVideoOpacity] = useState(0); // Opacité de la vidéo
+  const { isYouTubeVisible, setIsYouTubeVisible } = useYouTubeVisibility();
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const location = useLocation();
   const isPlanetsPage = location.pathname === '/planets';
 
   const videoUrl = `https://www.youtube.com/embed/${videoId}?si=0hJOpQv2p215JRzm&autoplay=1&mute=${isMuted ? 1 : 0}&loop=1&playlist=${videoId}&controls=0&showinfo=0`;
 
-  // Animation de fade in/out sur la page planets
+  // Animation de fade in/out sur la page planets - avec visibility au lieu de opacity
   useEffect(() => {
     if (!isPlanetsPage) {
       // Sur les autres pages, la vidéo est toujours visible
-      setVideoOpacity(1);
+      setIsYouTubeVisible(true);
       return;
     }
 
@@ -28,21 +29,21 @@ export default function YouTubeBackground({ videoId, className = '' }: YouTubeBa
     let timeoutId: number;
 
     const cycleVideo = () => {
-      // Fade in (apparition) - visible pendant 3 secondes
-      setVideoOpacity(1);
+      // Apparition - visible pendant 3 secondes
+      setIsYouTubeVisible(true);
       
-      // Après 3 secondes, fade out (disparition)
+      // Après 3 secondes, disparition
       timeoutId = window.setTimeout(() => {
-        setVideoOpacity(0);
+        setIsYouTubeVisible(false);
       }, 3000);
     };
 
     // Commencer avec la vidéo visible, puis démarrer le cycle
-    setVideoOpacity(1);
+    setIsYouTubeVisible(true);
     
     // Démarrer le premier cycle après 3 secondes
     timeoutId = window.setTimeout(() => {
-      setVideoOpacity(0);
+      setIsYouTubeVisible(false);
       // Répéter le cycle toutes les 8 secondes (3s visible + 5s cachée)
       intervalId = window.setInterval(cycleVideo, 8000);
     }, 3000);
@@ -51,7 +52,7 @@ export default function YouTubeBackground({ videoId, className = '' }: YouTubeBa
       if (intervalId) clearInterval(intervalId);
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, [isPlanetsPage]);
+  }, [isPlanetsPage, setIsYouTubeVisible]);
 
   // Icônes SVG simples pour le volume
   const VolumeXIcon = () => (
@@ -69,14 +70,14 @@ export default function YouTubeBackground({ videoId, className = '' }: YouTubeBa
 
   return (
     <>
-      {/* Video Background - toujours présent avec animation d'opacité */}
+      {/* Video Background - toujours présent avec animation visibility (pas opacity pour éviter les conflits de stacking) */}
       {/* z-index: 0 pour être au-dessus du body mais sous les planètes (z-index: 100) */}
       <div 
         className={`fixed inset-0 overflow-hidden pointer-events-none ${className}`} 
         style={{ 
           zIndex: 0,
-          opacity: videoOpacity,
-          transition: 'opacity 1s ease-in-out'
+          visibility: isYouTubeVisible ? 'visible' : 'hidden',
+          transition: 'visibility 0s linear 0.5s' // Transition douce pour l'apparition
         }}
       >
         <iframe
