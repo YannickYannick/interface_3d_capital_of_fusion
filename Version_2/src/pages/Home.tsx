@@ -2,13 +2,15 @@ import Scene3D from '../components/Scene3D';
 import VideoBackground from '../components/VideoBackground';
 import Logo from '../components/Logo';
 import { useYouTubeVisibility } from '../contexts/YouTubeVisibilityContext';
+import { usePlanetsOptions } from '../contexts/PlanetsOptionsContext';
 
 export default function Home() {
   const { isYouTubeVisible } = useYouTubeVisibility();
+  const { videoBlendEnabled } = usePlanetsOptions();
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100vh' }}>
-      {/* Background video en plein écran - caché quand YouTube est visible */}
+      {/* Background video en plein écran - mélange si activé */}
       <div style={{ 
         position: 'fixed', 
         top: 0, 
@@ -19,7 +21,9 @@ export default function Home() {
         height: '100vh', 
         overflow: 'hidden',
         zIndex: -2,
-        visibility: isYouTubeVisible ? 'hidden' : 'visible'
+        visibility: (videoBlendEnabled || !isYouTubeVisible) ? 'visible' : 'hidden',
+        opacity: (videoBlendEnabled && isYouTubeVisible) ? 0.5 : 1,
+        transition: 'opacity 0.5s ease-in-out'
       }}>
         <VideoBackground src="/background-video.mp4" />
       </div>

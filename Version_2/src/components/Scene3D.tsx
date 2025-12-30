@@ -15,6 +15,7 @@ import {
   getSquarePosition,
   type SphereConfig,
 } from '../lib/physics';
+import { usePlanetsOptions } from '../contexts/PlanetsOptionsContext';
 
 interface PhysicsState {
   velocity: THREE.Vector3;
@@ -35,10 +36,17 @@ export default function Scene3D() {
   const animationFrameRef = useRef<number>();
   const selectedObjectRef = useRef<THREE.Object3D | null>(null);
   const hoveredObjectRef = useRef<THREE.Object3D | null>(null);
-  const highlightMeshRef = useRef<THREE.Mesh | null>(null);
+  const orbitLinesRef = useRef<THREE.Line[]>([]);
+  const { orbitsVisible } = usePlanetsOptions();
 
   useEffect(() => {
     if (!containerRef.current) return;
+    
+    // Éviter de créer un nouveau contexte si un existe déjà
+    if (rendererRef.current) {
+      console.warn('WebGL renderer already exists, skipping initialization');
+      return;
+    }
 
     const container = containerRef.current;
     const scene = new THREE.Scene();
@@ -56,6 +64,14 @@ export default function Scene3D() {
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setClearColor(0x000000, 0); // Fond transparent
+    
+    // Réglages pour améliorer le rendu des textures et profondeurs
+    renderer.outputColorSpace = THREE.SRGBColorSpace; // Espace colorimétrique correct
+    renderer.toneMapping = THREE.ACESFilmicToneMapping; // Meilleur contraste et profondeur
+    renderer.toneMappingExposure = 1.5; // Augmenter l'exposition
+    renderer.shadowMap.enabled = true; // Activer les ombres
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Ombres douces
+    
     renderer.domElement.style.position = 'absolute';
     renderer.domElement.style.top = '0';
     renderer.domElement.style.left = '0';
@@ -70,129 +86,34 @@ export default function Scene3D() {
     controls.update();
     controlsRef.current = controls;
 
-    // Lumières
-    scene.add(new THREE.AmbientLight(0xffffff, 0.35));
-    const light1 = new THREE.PointLight(0xffffff, 1);
+    // Lumières - intensités augmentées pour plus d'exposition
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6)); // Lumière ambiante douce
+    
+    // Lumière principale directionnelle (meilleure pour les ombres et profondeur)
+    const mainLight = new THREE.DirectionalLight(0xffffff, 2.0);
+    mainLight.position.set(10, 15, 10);
+    mainLight.castShadow = true;
+    mainLight.shadow.mapSize.width = 2048;
+    mainLight.shadow.mapSize.height = 2048;
+    mainLight.shadow.camera.near = 0.5;
+    mainLight.shadow.camera.far = 50;
+    scene.add(mainLight);
+    
+    // Lumières ponctuelles pour ajouter de la couleur et des reflets
+    const light1 = new THREE.PointLight(0xffffff, 1.5);
     light1.position.set(10, 10, 10);
     scene.add(light1);
-    const light2 = new THREE.PointLight(0x7c3aed, 0.4);
+    const light2 = new THREE.PointLight(0x7c3aed, 1.0); // Violet
     light2.position.set(-10, -10, -10);
     scene.add(light2);
-    const light3 = new THREE.PointLight(0x06b6d4, 0.4);
+    const light3 = new THREE.PointLight(0x06b6d4, 1.0); // Cyan
     light3.position.set(0, 5, 5);
     scene.add(light3);
-
-    // Aura électrique pour la sphère survolée/sélectionnée
-    const auraGroup = new THREE.Group();
-    auraGroup.visible = false;
-    scene.add(auraGroup);
-
-    // Sphère d'aura principale (glow) - taille réduite par 5
-    const auraSphereGeometry = new THREE.SphereGeometry(0.2, 32, 32);
-    const auraSphereMaterial = new THREE.MeshBasicMaterial({
-      color: 0x00aaff,
-      transparent: true,
-      opacity: 0.3,
-      side: THREE.BackSide,
-    });
-    const auraSphere = new THREE.Mesh(auraSphereGeometry, auraSphereMaterial);
-    auraGroup.add(auraSphere);
-
-    // Sphère externe pour l'aura diffuse - taille réduite par 5
-    const auraOuterGeometry = new THREE.SphereGeometry(0.23, 32, 32);
-    const auraOuterMaterial = new THREE.MeshBasicMaterial({
-      color: 0x0066ff,
-      transparent: true,
-      opacity: 0.15,
-      side: THREE.BackSide,
-    });
-    const auraOuter = new THREE.Mesh(auraOuterGeometry, auraOuterMaterial);
-    auraGroup.add(auraOuter);
-
-    // Éclairs électriques (lightning bolts) - génération procédurale
-    const lightningGroup = new THREE.Group();
-    const lightningCount = 12;
-    const lightningLines: THREE.Line[] = [];
-
-    function generateLightningBolt(start: THREE.Vector3, end: THREE.Vector3, segments: number, offset: number = 0): THREE.Vector3[] {
-      const points: THREE.Vector3[] = [start.clone()];
-      const direction = new THREE.Vector3().subVectors(end, start);
-      const length = direction.length();
-      direction.normalize();
-      
-      for (let i = 1; i < segments; i++) {
-        const t = i / segments;
-        const basePoint = new THREE.Vector3().copy(start).add(direction.multiplyScalar(length * t));
-        
-        // Créer un effet zigzag pour les éclairs
-        const perp1 = new THREE.Vector3(-direction.y, direction.x, direction.z).normalize();
-        const perp2 = new THREE.Vector3().crossVectors(direction, perp1).normalize();
-        
-        const noise1 = (Math.random() - 0.5) * 0.15;
-        const noise2 = (Math.random() - 0.5) * 0.15;
-        const zigzag = Math.sin(t * Math.PI * 4 + offset) * 0.1;
-        
-        basePoint.add(perp1.multiplyScalar(noise1 + zigzag));
-        basePoint.add(perp2.multiplyScalar(noise2));
-        
-        points.push(basePoint);
-      }
-      points.push(end.clone());
-      return points;
-    }
-
-    for (let i = 0; i < lightningCount; i++) {
-      const angle = (i / lightningCount) * Math.PI * 2;
-      const verticalAngle = (Math.random() - 0.5) * Math.PI * 0.8;
-      
-      // Point de départ sur la sphère - taille réduite par 5
-      const startRadius = 0.204;
-      const start = new THREE.Vector3(
-        Math.cos(angle) * Math.cos(verticalAngle) * startRadius,
-        Math.sin(verticalAngle) * startRadius,
-        Math.sin(angle) * Math.cos(verticalAngle) * startRadius
-      );
-      
-      // Point d'arrivée légèrement plus loin - taille réduite par 5
-      const endRadius = 0.23 + Math.random() * 0.02;
-      const end = new THREE.Vector3(
-        Math.cos(angle) * Math.cos(verticalAngle) * endRadius,
-        Math.sin(verticalAngle) * endRadius,
-        Math.sin(angle) * Math.cos(verticalAngle) * endRadius
-      );
-      
-      const points = generateLightningBolt(start, end, 8, i * 0.5);
-      const geometry = new THREE.BufferGeometry().setFromPoints(points);
-      const material = new THREE.LineBasicMaterial({
-        color: 0x00aaff,
-        transparent: true,
-        opacity: 0.9,
-        linewidth: 1,
-      });
-      const line = new THREE.Line(geometry, material);
-      lightningLines.push(line);
-      lightningGroup.add(line);
-      
-      // Ajouter des branches secondaires pour plus de réalisme
-      if (Math.random() > 0.5) {
-        const branchPoint = points[Math.floor(points.length / 2)];
-        const branchEnd = new THREE.Vector3().copy(branchPoint).multiplyScalar(1.1 + Math.random() * 0.05);
-        const branchPoints = generateLightningBolt(branchPoint, branchEnd, 5, i * 0.5 + 10);
-        const branchGeometry = new THREE.BufferGeometry().setFromPoints(branchPoints);
-        const branchLine = new THREE.Line(branchGeometry, material.clone());
-        branchLine.material.opacity = 0.6;
-        lightningLines.push(branchLine);
-        lightningGroup.add(branchLine);
-      }
-    }
-    auraGroup.add(lightningGroup);
-
-    // Stocker les références pour l'animation
-    highlightMeshRef.current = auraGroup as any;
-    (auraGroup as any).lightningLines = lightningLines;
-    (auraGroup as any).lightningGroup = lightningGroup;
-    (auraGroup as any).auraSphere = auraSphere;
-    (auraGroup as any).auraOuter = auraOuter;
+    
+    // Lumière de remplissage par le bas pour éviter les zones trop sombres
+    const fillLight = new THREE.PointLight(0xffffff, 0.4);
+    fillLight.position.set(0, -10, 0);
+    scene.add(fillLight);
 
     const tmpVec = new THREE.Vector3();
 
@@ -363,6 +284,28 @@ export default function Scene3D() {
         const gltf = await loader.loadAsync(modelPath);
         const model = gltf.scene;
         
+        // Améliorer les matériaux du modèle pour un meilleur rendu
+        model.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            // Activer les ombres
+            child.castShadow = true;
+            child.receiveShadow = true;
+            
+            // Améliorer le matériau
+            if (child.material) {
+              const materials = Array.isArray(child.material) ? child.material : [child.material];
+              materials.forEach((mat) => {
+                if (mat instanceof THREE.MeshStandardMaterial || mat instanceof THREE.MeshPhysicalMaterial) {
+                  mat.envMapIntensity = 1.5; // Augmenter les reflets
+                  mat.needsUpdate = true;
+                }
+                // Forcer la mise à jour du matériau
+                mat.needsUpdate = true;
+              });
+            }
+          }
+        });
+        
         // Créer un groupe pour contenir le modèle
         const group = new THREE.Group();
         group.add(model);
@@ -371,6 +314,10 @@ export default function Scene3D() {
         const box = new THREE.Box3().setFromObject(model);
         const size = box.getSize(new THREE.Vector3());
         const maxDim = Math.max(size.x, size.y, size.z);
+        
+        // Centrer le modèle
+        const center = box.getCenter(new THREE.Vector3());
+        model.position.sub(center);
         
         // Normaliser le modèle à une taille de base de 1 unité
         const normalizeScale = 1 / maxDim;
@@ -391,7 +338,7 @@ export default function Scene3D() {
         // Optionnel : créer une sphère de fallback
         const fallbackMesh = new THREE.Mesh(
           new THREE.SphereGeometry(1, 32, 32),
-          new THREE.MeshBasicMaterial({ color: 0xff0000 })
+          new THREE.MeshStandardMaterial({ color: 0xff0000, roughness: 0.5, metalness: 0.5 })
         );
         fallbackMesh.scale.setScalar(scale);
         fallbackMesh.position.set(orbit.centerX, orbit.centerY, orbit.centerZ);
@@ -423,17 +370,19 @@ export default function Scene3D() {
       const material = new THREE.LineBasicMaterial({ 
         color: 0xffffff, 
         transparent: true, 
-        opacity: 0.3,
-        linewidth: 1
+        opacity: orbitsVisible ? 0.8 : 0.3,
+        linewidth: orbitsVisible ? 2 : 1
       });
       const line = new THREE.Line(geometry, material);
+      line.visible = orbitsVisible;
+      orbitLinesRef.current.push(line);
       scene.add(line);
     }
 
-    // Création des trajectoires visibles (désactivé)
-    // ORBITS.forEach((item) => {
-    //   makeOrbitPath(item.orbit);
-    // });
+    // Création des trajectoires visibles
+    ORBITS.forEach((item) => {
+      makeOrbitPath(item.orbit);
+    });
 
     // Création des objets
     ORBITS.forEach((item) => {
@@ -508,53 +457,7 @@ export default function Scene3D() {
           mesh.rotation.y += mesh.userData.rotSpeed * 0.003;
         }
 
-        // Mise à jour de l'aura électrique pour la sphère survolée ou sélectionnée
-        const targetObject = hoveredObjectRef.current || selectedObjectRef.current;
-        if (highlightMeshRef.current && targetObject === mesh) {
-          const auraGroup = highlightMeshRef.current as any;
-          auraGroup.position.copy(state.currentPosition);
-          auraGroup.visible = true;
-          
-          const config = ORBITS.find((o) => o.id === id);
-          if (config) {
-            const baseScale = config.scale * 1.2;
-            const pulse = 1 + Math.sin(elapsed * 3) * 0.05; // Pulsation subtile
-            
-            // Mise à jour de l'échelle de l'aura
-            auraGroup.scale.setScalar(baseScale * pulse);
-            
-            // Animation des éclairs (rotation et pulsation)
-            if (auraGroup.lightningLines && auraGroup.lightningGroup) {
-              auraGroup.lightningGroup.rotation.y += 0.015;
-              auraGroup.lightningGroup.rotation.x += 0.005;
-              auraGroup.lightningLines.forEach((line: THREE.Line, index: number) => {
-                // Animation des éclairs avec variation d'opacité et scintillement
-                const material = line.material as THREE.LineBasicMaterial;
-                const flicker = Math.sin(elapsed * 8 + index * 0.5) * 0.3;
-                material.opacity = 0.7 + flicker;
-              });
-            }
-            
-            // Pulsation de l'aura principale
-            if (auraGroup.auraSphere) {
-              const sphereMat = (auraGroup.auraSphere as THREE.Mesh).material as THREE.MeshBasicMaterial;
-              sphereMat.opacity = 0.25 + Math.sin(elapsed * 3) * 0.1;
-            }
-            
-            // Pulsation de l'aura externe
-            if (auraGroup.auraOuter) {
-              const outerMat = (auraGroup.auraOuter as THREE.Mesh).material as THREE.MeshBasicMaterial;
-              outerMat.opacity = 0.1 + Math.sin(elapsed * 2.5) * 0.05;
-            }
-          }
-        }
       });
-
-      // Cacher l'aura si aucune sphère n'est survolée ou sélectionnée
-      if (highlightMeshRef.current && hoveredObjectRef.current === null && selectedObjectRef.current === null) {
-        const auraGroup = highlightMeshRef.current as any;
-        auraGroup.visible = false;
-      }
     }
 
     // Mouse tracking
@@ -636,10 +539,6 @@ export default function Scene3D() {
       } else {
         // Désélectionner si on clique ailleurs
         selectedObjectRef.current = null;
-        if (highlightMeshRef.current) {
-          const auraGroup = highlightMeshRef.current as any;
-          auraGroup.visible = false;
-        }
       }
     };
 
@@ -647,10 +546,6 @@ export default function Scene3D() {
       e.preventDefault();
       // Désélectionner la sphère
       selectedObjectRef.current = null;
-      if (highlightMeshRef.current) {
-        const auraGroup = highlightMeshRef.current as any;
-        auraGroup.visible = false;
-      }
       // Retour à la position initiale avec inclinaison de 20°
       const distance = 20; // Augmenté de 15 à 20 pour reculer la caméra
       const angle = (20 * Math.PI) / 180;
@@ -690,21 +585,67 @@ export default function Scene3D() {
     };
     window.addEventListener('resize', handleResize);
 
-    // Cleanup
+    // Cleanup complet pour libérer les ressources WebGL
     return () => {
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('resize', handleResize);
       renderer.domElement.removeEventListener('click', handleClick);
       renderer.domElement.removeEventListener('dblclick', handleDoubleClick);
+      
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
+      
+      // Libérer toutes les géométries et matériaux de la scène
+      scene.traverse((object) => {
+        if (object instanceof THREE.Mesh) {
+          if (object.geometry) {
+            object.geometry.dispose();
+          }
+          if (object.material) {
+            if (Array.isArray(object.material)) {
+              object.material.forEach((material) => material.dispose());
+            } else {
+              object.material.dispose();
+            }
+          }
+        }
+      });
+      
+      // Vider les registres
+      sphereRegistryRef.current.clear();
+      meshRegistryRef.current.clear();
+      
+      // Supprimer le canvas du DOM
       if (container && renderer.domElement.parentNode) {
         container.removeChild(renderer.domElement);
       }
+      
+      // Libérer le contexte WebGL
       renderer.dispose();
+      renderer.forceContextLoss();
+      
+      // Nettoyer les refs
+      sceneRef.current = null;
+      cameraRef.current = null;
+      rendererRef.current = null;
+      controlsRef.current = null;
+      selectedObjectRef.current = null;
+      hoveredObjectRef.current = null;
     };
   }, []);
+
+  // Mettre à jour la visibilité et l'opacité des trajectoires quand le toggle change
+  useEffect(() => {
+    orbitLinesRef.current.forEach((line) => {
+      if (line.material instanceof THREE.LineBasicMaterial) {
+        line.visible = orbitsVisible;
+        line.material.opacity = orbitsVisible ? 0.8 : 0.3;
+        line.material.linewidth = orbitsVisible ? 2 : 1;
+        line.material.needsUpdate = true;
+      }
+    });
+  }, [orbitsVisible]);
 
   return <div ref={containerRef} className="fixed inset-0 w-full h-full" style={{ zIndex: 9999, pointerEvents: 'auto' }} />;
 }

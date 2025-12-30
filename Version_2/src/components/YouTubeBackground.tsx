@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useYouTubeVisibility } from '../contexts/YouTubeVisibilityContext';
+import { usePlanetsOptions } from '../contexts/PlanetsOptionsContext';
 
 interface YouTubeBackgroundProps {
   videoId: string;
@@ -10,9 +11,10 @@ interface YouTubeBackgroundProps {
 export default function YouTubeBackground({ videoId, className = '' }: YouTubeBackgroundProps) {
   const [isMuted, setIsMuted] = useState(true);
   const { isYouTubeVisible, setIsYouTubeVisible } = useYouTubeVisibility();
+  const { grayscaleEnabled } = usePlanetsOptions();
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const location = useLocation();
-  const isPlanetsPage = location.pathname === '/planets';
+  const isPlanetsPage = location.pathname === '/planets' || location.pathname === '/planets1';
 
   const videoUrl = `https://www.youtube.com/embed/${videoId}?si=0hJOpQv2p215JRzm&autoplay=1&mute=${isMuted ? 1 : 0}&loop=1&playlist=${videoId}&controls=0&showinfo=0`;
 
@@ -77,7 +79,8 @@ export default function YouTubeBackground({ videoId, className = '' }: YouTubeBa
         style={{ 
           zIndex: 0,
           visibility: isYouTubeVisible ? 'visible' : 'hidden',
-          transition: 'visibility 0s linear 0.5s' // Transition douce pour l'apparition
+          transition: 'visibility 0s linear 0.5s', // Transition douce pour l'apparition
+          filter: (isPlanetsPage && grayscaleEnabled) ? 'grayscale(100%)' : 'none' // Noir et blanc sur la page planets si activé
         }}
       >
         <iframe

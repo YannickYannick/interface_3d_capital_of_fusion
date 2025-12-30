@@ -8,6 +8,8 @@ import Section from './pages/Section';
 import PageTransition from './components/PageTransition';
 import YouTubeBackground from './components/YouTubeBackground';
 import { YouTubeVisibilityProvider } from './contexts/YouTubeVisibilityContext';
+import { PlanetsOptionsProvider } from './contexts/PlanetsOptionsContext';
+import PlanetsOptionsPanel from './components/PlanetsOptionsPanel';
 
 function AppRoutes() {
   const location = useLocation();
@@ -140,10 +142,13 @@ export default function App() {
   return (
     <BrowserRouter>
       <YouTubeVisibilityProvider>
-        {/* Vidéo YouTube en arrière-plan - persiste sur toutes les pages */}
-        <YouTubeBackground videoId="Dqg0oKlXpTE" />
-        <Nav />
-        <AppRoutes />
+        <PlanetsOptionsProvider>
+          {/* Vidéo YouTube en arrière-plan - persiste sur toutes les pages */}
+          <YouTubeBackground videoId="Dqg0oKlXpTE" />
+          <PlanetsOptionsPanel />
+          <Nav />
+          <AppRoutes />
+        </PlanetsOptionsProvider>
       </YouTubeVisibilityProvider>
     </BrowserRouter>
   );
